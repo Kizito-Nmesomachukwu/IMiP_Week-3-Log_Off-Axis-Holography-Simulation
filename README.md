@@ -7,12 +7,12 @@ In off-axis Mach-Zehnder interferometry, transparent biological samples (like si
 
 ## Pipeline
 
-1. **Load Hologram** — load a PNG interference pattern as a grayscale intensity image
-2. **FFT** — 2D Fourier transform into frequency space
-3. **Sideband Isolation** — block DC, locate the +1 sideband, apply circular mask
-4. **Inverse FFT** — shift sideband to center and transform back
-5. **Phase Unwrapping** — convert the wrapped phase map ($-\pi$ to $+\pi$) into a continuous optical path difference map.
-<!-- 6. **Background Tilt Removal** — fit and subtract a linear plane to remove residual fringe artifacts -->
+1. **Load Hologram** : Load a PNG interference pattern as a grayscale intensity image
+2. **FFT** : 2D Fourier transform into frequency space
+3. **Sideband Isolation** : Block DC, locate the +1 sideband, apply circular mask
+4. **Inverse FFT**:  Shift sideband to center and transform back
+5. **Phase Unwrapping**: Convert the wrapped phase map ($-\pi$ to $+\pi$) into a continuous optical path difference map.
+<!-- 6. **Background Tilt Removal** : Fit and subtract a linear plane to remove residual fringe artifacts -->
 
 ## Usage
 
