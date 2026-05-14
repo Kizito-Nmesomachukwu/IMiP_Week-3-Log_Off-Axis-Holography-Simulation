@@ -181,7 +181,7 @@ def plot_error_map(error_map, rmse):
     plt.show()
 
 
-def plot_results(hologram, H, unwrapped_phase, save_path="pipeline_visualisation.png"):
+def plot_results(hologram, H, unwrapped_phase, save_path="plots/pipeline_visualisation.png"):
     fig, axes = plt.subplots(1, 3, figsize=(15, 4))
     fig.suptitle("Off-Axis Holographic Phase Retrieval Pipeline", fontsize=14)
 
@@ -203,9 +203,9 @@ def plot_results(hologram, H, unwrapped_phase, save_path="pipeline_visualisation
     print(f"Pipeline visualisation saved as {save_path}")
 
 
-def run_pipeline(image_path="img/pattern_01.png", N=None,
+def run_pipeline(image_path="img/pattern_01.png", N=512,
                  radius=30, dc_block=15,
-                 save_path="pipeline_visualisation.png"):
+                 save_path="plots/pipeline_visualisation.png"):
     hologram = load_hologram(image_path, size=N)
     unwrapped_phase, wrapped_phase, H, _, _ = reconstruct_phase(
         hologram, radius=radius, dc_block=dc_block
