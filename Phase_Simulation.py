@@ -1,147 +1,222 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from skimage.restoration import unwrap_phase
+from PIL import Image
 
-# numpy handles all the heavy math and matrix grids.
-# matplotlib is used to draw the pictures at the end.
-# unwrap_phase from skimage is a special tool to fix phase maps that jump abruptly.
+def load_hologram(path, size=512):
+    img = Image.open(path).convert('L').resize((size, size))
+    return np.array(img, dtype=np.float64)
 
-# =============================================================================
-# Step 1: Generate a synthetic off-axis hologram
-# =============================================================================
-# Set up a square grid of 512 by 512 pixels.
-N = 512
-x = np.linspace(-1, 1, N)
-y = np.linspace(-1, 1, N)
-X, Y = np.meshgrid(x, y)
 
-# Create a pretend sample to look at. We use a simple Gaussian blob here 
-# because it looks a lot like a transparent biological cell under a microscope.
-true_phase = 2.0 * np.exp(-10 * (X**2 + Y**2))
-amplitude  = np.ones_like(true_phase)
+def load_phase_image(path, size=512, phase_range=2.0):
+    img = Image.open(path).convert('L').resize((size, size))
+    phase = np.array(img, dtype=np.float64)
+    phase = phase / phase.max() * phase_range
+    return phase
 
-# Create the reference laser beam. 
-# In the lab, this beam hits the camera at a slight angle.
-# The kx and ky values control how tilted the beam is. 
-# This tilt creates the stripe pattern (fringes) and pushes our useful data 
-# away from the messy center in the Fourier transform step.
-kx, ky = 20, 20
-reference   = np.exp(1j * 2 * np.pi * (kx * X + ky * Y))
-object_wave = amplitude * np.exp(1j * true_phase)
 
-# This simulates what the camera actually sees: the interference between 
-# the flat reference beam and the beam that passed through our cell.
-hologram = np.abs(reference + object_wave)**2
+def generate_test_phase(N=512, num_features=8, seed=None):
+    if seed is not None:
+        np.random.seed(seed)
+    X, Y = make_grid(N)
+    phase = np.zeros((N, N))
+    for _ in range(num_features):
+        cx = np.random.uniform(-0.8, 0.8)
+        cy = np.random.uniform(-0.8, 0.8)
+        sigma = np.random.uniform(0.05, 0.3)
+        amp = np.random.uniform(0.5, 3.0)
+        phase += amp * np.exp(-((X - cx) ** 2 + (Y - cy) ** 2) / (2 * sigma ** 2))
+    return phase
 
-# =============================================================================
-# Step 2: 2D Fast Fourier Transform
-# =============================================================================
-# fft2 converts our image from regular space into frequency space.
-# fftshift just reorganizes the result so the lowest frequency (the bright center) 
-# is right in the middle of the picture.
-H = np.fft.fftshift(np.fft.fft2(hologram))
 
-# =============================================================================
-# Step 3: Locate and isolate the +1 sideband
-# =============================================================================
-# We take the absolute value so we can search for the brightest spots.
-H_mag = np.abs(H).copy()
+def make_grid(N=512):
+    x = np.linspace(-1, 1, N)
+    y = np.linspace(-1, 1, N)
+    return np.meshgrid(x, y)
 
-# The center of the image (DC term) is extremely bright. If we don't cover it up,
-# our code will just select the center instead of the sideband we actually want.
-# Here we put a black box over the center to hide it.
-dc_block = 15
-cy_centre, cx_centre = N // 2, N // 2
-H_mag[cy_centre - dc_block : cy_centre + dc_block,
-      cx_centre - dc_block : cx_centre + dc_block] = 0
 
-# argmax finds the brightest single pixel left in the image, which is our sideband.
-# unravel_index turns that single number into an (x, y) pixel coordinate.
-cy, cx = np.unravel_index(np.argmax(H_mag), H_mag.shape)
-print(f"Sideband located at pixel: row={cy}, col={cx}  "
-      f"(DC centre is at {cy_centre}, {cx_centre}; "
-      f"offset = {cy - cy_centre}, {cx - cx_centre})")
+def generate_hologram(true_phase, kx=20, ky=20, X=None, Y=None):
+    N = true_phase.shape[0]
+    if X is None or Y is None:
+        X, Y = make_grid(N)
+    amplitude = np.ones_like(true_phase)
+    reference = np.exp(1j * 2 * np.pi * (kx * X + ky * Y))
+    object_wave = amplitude * np.exp(1j * true_phase)
+    hologram = np.abs(reference + object_wave) ** 2
+    return hologram, reference, object_wave
 
-# Now we draw a circular mask around that bright sideband. 
-# Think of it like a cookie cutter that keeps only the data inside a 30-pixel radius.
-radius = 30
-rows_idx = np.arange(N)[:, None]
-cols_idx = np.arange(N)[None, :]
-mask = (rows_idx - cy)**2 + (cols_idx - cx)**2 <= radius**2
 
-# Multiply by the mask to delete everything outside the circle.
-H_filtered = H * mask
+def compute_fft(hologram):
+    return np.fft.fftshift(np.fft.fft2(hologram))
 
-# =============================================================================
-# Step 4: Center sideband at DC, then inverse FFT
-# =============================================================================
-# np.roll shifts the image pixels. We are sliding our isolated sideband 
-# from its corner position right back into the dead center of the image.
-# If we skip this, our final picture will have a massive diagonal gradient 
-# covering up the cell.
-H_centred = np.roll(np.roll(H_filtered, N // 2 - cy, axis=0), N // 2 - cx, axis=1)
 
-# Now we reverse the Fourier transform to go back to a normal looking image.
-complex_field = np.fft.ifft2(np.fft.ifftshift(H_centred))
+def isolate_sideband(H, radius=30, dc_block=15):
+    N = H.shape[0]
+    H_mag = np.abs(H).copy()
+    cy_centre = cx_centre = N // 2
+    H_mag[cy_centre - dc_block: cy_centre + dc_block,
+          cx_centre - dc_block: cx_centre + dc_block] = 0
+    cy, cx = np.unravel_index(np.argmax(H_mag), H_mag.shape)
+    print(f"Sideband at pixel: row={cy}, col={cx}  "
+          f"(DC centre at {cy_centre},{cx_centre}; "
+          f"offset = {cy - cy_centre}, {cx - cx_centre})")
+    rows_idx = np.arange(N)[:, None]
+    cols_idx = np.arange(N)[None, :]
+    mask = (rows_idx - cy) ** 2 + (cols_idx - cx) ** 2 <= radius ** 2
+    H_filtered = H * mask
+    return H_filtered, H_mag, cy, cx
 
-# =============================================================================
-# Step 5: Extract and unwrap phase
-# =============================================================================
-# np.angle calculates the phase, but the math restricts it between -pi and +pi.
-# This causes the image to look like a target with sharp, repeating rings.
-wrapped_phase = np.angle(complex_field)
 
-# unwrap_phase stitches those rings together to build a smooth, continuous 3D hill.
-unwrapped_phase = unwrap_phase(wrapped_phase)
+def reconstruct_complex_field(H_filtered, cy, cx):
+    N = H_filtered.shape[0]
+    H_centred = np.roll(np.roll(H_filtered, N // 2 - cy, axis=0), N // 2 - cx, axis=1)
+    return np.fft.ifft2(np.fft.ifftshift(H_centred))
 
-# =============================================================================
-# Step 6: Reconstruction accuracy metric
-# =============================================================================
-# Sometimes the whole image is shifted up or down by a constant number.
-# Subtracting the mean forces both our reconstructed image and the original 
-# ground truth to start at a baseline of zero so we can compare them fairly.
-phase_recon = unwrapped_phase - np.mean(unwrapped_phase)
-phase_truth = true_phase      - np.mean(true_phase)
 
-# Calculate the error map and the Root Mean Square Error (RMSE) to see how we did.
-error_map = phase_recon - phase_truth
-rmse      = np.sqrt(np.mean(error_map**2))
-print(f"Reconstruction RMSE: {rmse:.4f} rad")
+def remove_background_tilt(phase, order=1):
+    X, Y = np.meshgrid(np.arange(phase.shape[1]), np.arange(phase.shape[0]))
+    mask = np.isfinite(phase)
+    A = np.c_[X[mask], Y[mask], np.ones(mask.sum())]
+    if order >= 2:
+        A = np.c_[X[mask]**2, Y[mask]**2, X[mask]*Y[mask], A]
+    coeffs, _, _, _ = np.linalg.lstsq(A, phase[mask], rcond=None)
+    bg = np.zeros_like(phase)
+    if order == 1:
+        bg = coeffs[0] * X + coeffs[1] * Y + coeffs[2]
+    elif order >= 2:
+        bg = (coeffs[0] * X**2 + coeffs[1] * Y**2 + coeffs[2] * X * Y +
+              coeffs[3] * X + coeffs[4] * Y + coeffs[5])
+    return phase - bg
 
-# =============================================================================
-# Step 7: Visualise
-# =============================================================================
-# We crop the hologram panel just to zoom in and see the stripes clearly.
-crop = slice(200, 300)   
 
-# Set up a grid of 6 plots.
-fig, axes = plt.subplots(2, 3, figsize=(15, 10))
-fig.suptitle("Off-Axis Holographic Phase Retrieval and Simulation Pipeline", fontsize=14)
+def extract_phase(complex_field, remove_tilt=True):
+    wrapped_phase = np.angle(complex_field)
+    unwrapped_phase = unwrap_phase(wrapped_phase)
+    if remove_tilt:
+        unwrapped_phase = remove_background_tilt(unwrapped_phase, order=1)
+    return wrapped_phase, unwrapped_phase
 
-axes[0, 0].imshow(hologram[crop, crop], cmap='gray')
-axes[0, 0].set_title('1. Synthetic Hologram (Zoomed)')
 
-axes[0, 1].imshow(np.log(1 + np.abs(H)), cmap='gray')
-axes[0, 1].set_title('2. FFT Spectrum\n(DC + two sidebands visible)')
+def reconstruct_phase(hologram, radius=30, dc_block=15):
+    H = compute_fft(hologram)
+    H_filtered, H_mag, cy, cx = isolate_sideband(H, radius, dc_block)
+    complex_field = reconstruct_complex_field(H_filtered, cy, cx)
+    wrapped_phase, unwrapped_phase = extract_phase(complex_field)
+    return unwrapped_phase, wrapped_phase, H, H_filtered, complex_field
 
-axes[0, 2].imshow(true_phase, cmap='viridis')
-axes[0, 2].set_title('3. True Phase; Ground Truth (rad)')
 
-axes[1, 0].imshow(wrapped_phase, cmap='hsv')
-axes[1, 0].set_title('4. Wrapped Phase (-π to +π)')
+def compute_error(true_phase, reconstructed_phase):
+    phase_recon = reconstructed_phase - np.mean(reconstructed_phase)
+    phase_truth = true_phase - np.mean(true_phase)
+    error_map = phase_recon - phase_truth
+    rmse = np.sqrt(np.mean(error_map ** 2))
+    print(f"Reconstruction RMSE: {rmse:.4f} rad")
+    return phase_recon, phase_truth, error_map, rmse
 
-axes[1, 1].imshow(unwrapped_phase, cmap='viridis')
-axes[1, 1].set_title('5. Unwrapped Phase: Reconstructed (rad)')
 
-# Plot the error map with a custom red-to-blue color scale.
-im = axes[1, 2].imshow(error_map, cmap='RdBu', vmin=-0.5, vmax=0.5)
-axes[1, 2].set_title(f'6. Reconstruction Error Map\n(RMSE = {rmse:.4f} rad)')
-fig.colorbar(im, ax=axes[1, 2], fraction=0.046, pad=0.04)
+def plot_hologram(hologram):
+    plt.figure(figsize=(5, 4))
+    plt.imshow(hologram, cmap='gray')
+    plt.title('Hologram (Interference Pattern)')
+    plt.axis('off')
+    plt.show()
 
-# Turn off the axis tick marks for cleaner images.
-for ax in axes.flat:
-    ax.axis('off')
 
-plt.tight_layout()
-plt.savefig('pipeline_visualisation.png', dpi=150, bbox_inches='tight')
-print("Pipeline complete. Image saved as pipeline_visualisation.png")
+def plot_spectrum(H):
+    plt.figure(figsize=(5, 4))
+    plt.imshow(np.log(1 + np.abs(H)), cmap='gray')
+    plt.title('FFT Spectrum (DC + Sidebands)')
+    plt.axis('off')
+    plt.show()
+
+
+def plot_sideband_selection(H_mag, H_filtered):
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    axes[0].imshow(np.log(1 + np.abs(H_mag)), cmap='gray')
+    axes[0].set_title('DC Blocked; Sideband Highlighted')
+    axes[0].axis('off')
+    axes[1].imshow(np.log(1 + np.abs(H_filtered)), cmap='gray')
+    axes[1].set_title('Isolated +1 Sideband')
+    axes[1].axis('off')
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_reconstructed_amplitude(complex_field):
+    plt.figure(figsize=(5, 4))
+    plt.imshow(np.abs(complex_field), cmap='gray')
+    plt.title('Reconstructed Amplitude')
+    plt.axis('off')
+    plt.show()
+
+
+def plot_phase_comparison(wrapped_phase, unwrapped_phase):
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    axes[0].imshow(wrapped_phase, cmap='hsv')
+    axes[0].set_title('Wrapped Phase (-π to +π)')
+    axes[0].axis('off')
+    im = axes[1].imshow(unwrapped_phase, cmap='viridis')
+    axes[1].set_title('Unwrapped Phase (rad)')
+    axes[1].axis('off')
+    plt.colorbar(im, ax=axes[1], fraction=0.046, pad=0.04)
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_input_phase(phase):
+    plt.figure(figsize=(5, 4))
+    plt.imshow(phase, cmap='viridis')
+    plt.title('Input Phase Map (rad)')
+    plt.colorbar()
+    plt.axis('off')
+    plt.show()
+
+
+def plot_error_map(error_map, rmse):
+    plt.figure(figsize=(5, 4))
+    plt.imshow(error_map, cmap='RdBu', vmin=-0.5, vmax=0.5)
+    plt.title(f'Reconstruction Error (RMSE = {rmse:.4f} rad)')
+    plt.colorbar()
+    plt.axis('off')
+    plt.show()
+
+
+def plot_results(hologram, H, unwrapped_phase, save_path="pipeline_visualisation.png"):
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    fig.suptitle("Off-Axis Holographic Phase Retrieval Pipeline", fontsize=14)
+
+    axes[0].imshow(hologram, cmap='gray')
+    axes[0].set_title('Hologram')
+
+    axes[1].imshow(np.log(1 + np.abs(H)), cmap='gray')
+    axes[1].set_title('FFT Spectrum')
+
+    im = axes[2].imshow(unwrapped_phase, cmap='viridis')
+    axes[2].set_title('Reconstructed Phase (rad)')
+    fig.colorbar(im, ax=axes[2], fraction=0.046, pad=0.04)
+
+    for ax in axes.flat:
+        ax.axis('off')
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    print(f"Pipeline visualisation saved as {save_path}")
+
+
+def run_pipeline(image_path="img/pattern_01.png", N=None,
+                 radius=30, dc_block=15,
+                 save_path="pipeline_visualisation.png"):
+    hologram = load_hologram(image_path, size=N)
+    unwrapped_phase, wrapped_phase, H, _, _ = reconstruct_phase(
+        hologram, radius=radius, dc_block=dc_block
+    )
+    plot_results(hologram, H, unwrapped_phase, save_path=save_path)
+    return {
+        "hologram": hologram,
+        "unwrapped_phase": unwrapped_phase,
+        "wrapped_phase": wrapped_phase,
+    }
+
+
+if __name__ == "__main__":
+    results = run_pipeline()
