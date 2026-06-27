@@ -1,10 +1,17 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from skimage.restoration import unwrap_phase
+from scipy.ndimage import gaussian_filter
 from PIL import Image
 
 def load_hologram(path, size=512):
-    img = Image.open(path).convert('L').resize((size, size))
+    # img = Image.open(path).convert('L').astype(np.float64).resize((size, size))
+    img = np.array(Image.open(path).convert('L').resize((size, size))).astype(np.float64)
+
+    # Step 1: Remove low-frequency background (DC subtraction)
+    bg_blur = gaussian_filter(img, sigma=50)
+    img = img - bg_blur
+
     return np.array(img, dtype=np.float64)
 
 
